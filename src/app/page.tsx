@@ -1,95 +1,139 @@
-import Image from "next/image";
+"use client"
+
+import * as twilio from "twilio-client"
+import { useEffect, useState } from "react";
+import Login from "./components/Login";
 import styles from "./page.module.css";
+import axios from "./utils/axios";
+import socket from "./utils/socket";
+import CallCenter from "./components/CallCenter/CallCenter";
+import useAuthGuard from "./hooks/useAuthGuard";
 
 export default function Home() {
+  const [calls, setCalls] = useState([] as any[]);
+  const [storedToken, setStoredToken, isAuthenticated] = useAuthGuard(null);
+  const [twilioToken, setTwilioToken] = useState(null);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      socket.addToken(storedToken);
+    } else {
+      socket.removeToken();
+    }
+  }, [isAuthenticated, storedToken]);
+
+  useEffect(() => {
+    if (twilioToken) {
+      connectTwilioVoiceClient(twilioToken);
+    }
+  }, [twilioToken]);
+
+  useEffect(() => {
+    socket.client.on("connect", () => {
+      console.log("Socket connected");
+    })
+    socket.client.on("disconnect", () => {
+      console.log("Socket disconnected");
+    })
+    socket.client.on("twilio-token", (data: any) => {
+      setTwilioToken(data.token);
+    })
+    socket.client.on("call-new", (data: any) => {
+      setCalls((prevState: any) => {
+        const callFound = prevState.findIndex((call: any) => call.CallSid === data.CallSid);
+        if (callFound === -1) {
+          return [...prevState, data];
+        } else {
+          return [...prevState];
+        }
+      })
+    })
+    socket.client.on("enqueue-call", (data: any) => {
+      setCalls((prevState: any) => {
+        console.log(prevState)
+        const callFound = prevState.findIndex((call: any) => call.CallSid === data.CallSid);
+        if (callFound !== -1) {
+          prevState[callFound].CallStatus = "enqueue";
+        }
+        return [...prevState];
+      })
+    })
+    socket.client.on("answered-call", (data: any) => {
+      setCalls((prevState: any) => {
+        const callFound = prevState.findIndex((call: any) => call.CallSid === data.CallSid);
+        if (callFound !== -1) {
+          prevState[callFound].CallStatus = "in-progress";
+        }
+        return [...prevState];
+      })
+    })
+    socket.client.on("call-completed", (data: any) => {
+      setCalls((prevState: any) => {
+        const callFound = prevState.findIndex((call: any) => call.CallSid === data.CallSid);
+        if (callFound !== -1) {
+          prevState[callFound].CallStatus = "completed";
+        }
+        return [...prevState];
+      })
+    })
+    return () => {}
+  }, [socket.client]);
+
+  const [user, setUser] = useState({
+    userName: "",
+    phoneNumber: "",
+    verificationCode: "",
+    isVerificationCodeSend: false,
+  });
+
+  const sendVerification = async (event: any) => {
+    event.preventDefault();
+    const resp = await axios.post("/verification-code", user)
+    if (resp.status === 200 && resp.data.status && resp.data.status === "pending") {
+      setUser((prevState) => ({
+        ...prevState,
+        isVerificationCodeSend: true,
+      }));
+    }
+  }
+
+  const verifyCode = async (event: any) => {
+    event.preventDefault();
+    const resp = await axios.post("/verify", {
+      userName: user.userName,
+      phone: user.phoneNumber,
+      code: user.verificationCode
+    })
+    if (resp.status === 200 && resp.data.status && resp.data.status === "approved") {
+      setStoredToken(resp.data.token);
+    }
+  }
+
+  const connectTwilioVoiceClient = async (twilioToken: string) => {
+    const device = new twilio.Device(twilioToken, { debug: true });
+    device.on("error", (error) => {
+      console.log("Twilio device error", error);
+    })
+    device.on("incoming", (connection) => {
+      console.log("Incoming call", connection);
+      connection.accept();
+    });
+  }
+
   return (
     <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol>
-          <li>
-            Get started by editing <code>src/app/page.tsx</code>.
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.secondary}
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className={styles.footer}>
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
+      {
+        isAuthenticated ? (
+          <CallCenter calls={calls} />
+        ) : (
+          <Login
+            user={user}
+            setUser={setUser}
+            sendVerification={sendVerification}
+            verifyCode={verifyCode}
           />
-          Learn
-        </a>
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        )
+      }
     </div>
   );
 }
